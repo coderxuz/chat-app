@@ -8,12 +8,13 @@ class User(Base):
     __tablename__ = "users"
 
     name: Mapped[str] = mapped_column(unique=True)
+    password:Mapped[str]
 
     sent_messages: Mapped["Chat"] = relationship(
         back_populates="sender", foreign_keys="[Chat.sender_id]"
     )
     received_messages: Mapped["Chat"] = relationship(
-        back_populates="sender", foreign_keys="[Chat.receiver_id]"
+        back_populates="receiver", foreign_keys="[Chat.receiver_id]"
     )
 
 
@@ -30,6 +31,10 @@ class Chat(Base):
     receiver: Mapped["User"] = relationship(
         back_populates="received_messages", foreign_keys=[receiver_id]
     )
+    def __init__(self,sender_id:int, receiver_id:int, message:str):
+        self.receiver_id = receiver_id
+        self.sender_id = sender_id
+        self.message = message
 
 
 if __name__ == '__main__':
