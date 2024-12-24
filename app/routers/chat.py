@@ -5,24 +5,26 @@ from pydantic import ValidationError
 
 # from common import auth
 from app.database import get_async_db
-from app.models import User, Chat
-from app.connection import ConnectionManager
+from app.models import User
+from app.connection import manager
 from common import logger
 from app.funcs.token import get_token
 from app.schemas import MessageData
+from app.funcs.chat_funcs import query_get_receivers_socket, ReceiverNotFound, add_new_chat_to_db
 
-from typing import Optional
+import json
 
 router = APIRouter(prefix='/chat', tags=["CHAT"])
 
 
-manager = ConnectionManager()
+
 
 
 @router.websocket("/ws")
 async def websocket_end(websocket: WebSocket, db:AsyncSession = Depends(get_async_db)):
     db_user = None
     try:
+        #getting current user from database
         subject  = await get_token(websocket=websocket)
         if not subject:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -34,52 +36,39 @@ async def websocket_end(websocket: WebSocket, db:AsyncSession = Depends(get_asyn
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         
-        user_name = websocket.query_params.get("user_name")
-        if not user_name:
-            await websocket.send_json({"message": "user_name"})
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-        receivers_socket:Optional[WebSocket] = None
-        receiver_query = await db.execute(select(User).where(User.name == user_name))
-        receiver = receiver_query.scalars().first()
+        #accepting socket and adding to self.active connections
+        await manager.connect(db_user.name, websocket=websocket)
         
+        while True: 
+            # getting receiver
+            receivers_data = await query_get_receivers_socket(current_socket=websocket, db_user=db_user, db=db)
             
+            receivers_socket = receivers_data.get('receivers_socket')
+            receiver = receivers_data.get('receiver')
             
-        if  not receiver:
-            logger.debug('receiver not found from db')
-            await websocket.send_json({"message": "receiver not found"})
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-        receivers_socket = await manager.get_receivers_socket(user_name)
+            if not receiver:
+                raise ReceiverNotFound
             
-        await manager.connect(user_name=db_user.name, websocket=websocket)
-        if receivers_socket is None:
-                logger.debug('receiver not found')
-                await websocket.send_json({"message":f"{user_name} not online"})
-        
-        while True:
-            if user_name:  
-                receivers_socket = await manager.get_receivers_socket(user_name)
+            #message
             data = await websocket.receive_json()
             logger.debug(manager.active_connections)
+            if not data:
+                await websocket.send_json({"message": "Empty message received"})
+                continue
             try:
-                message_json=MessageData(**data)
+                message_json = MessageData(**data)
                 logger.debug(type(receivers_socket))
                 
-                new_message = Chat(
-                    message= message_json.message,
-                    sender_id= db_user.id,
-                    receiver_id = receiver.id
-                )
-                db.add(new_message)
-                await db.commit()
-                await db.refresh(new_message)
+                #adding to db
+                await add_new_chat_to_db(message=message_json.message, sender_id=db_user.id, receiver_id=receiver.id, db=db)
+                
                 if receivers_socket:
                     await receivers_socket.send_json(data=data)
                 else:
                     await websocket.send_json({"message": "receiver not connected"})
-            except ValidationError:
-                await websocket.send_json({"message":"please send valid data (message didn't send)"})
+            except (ValidationError, json.JSONDecodeError)as e:
+                await websocket.send_json({"message": "please send valid data (message didn't send)"})
+                logger.error(f"Validation error: {e}")
             
             
     except WebSocketDisconnect:
@@ -89,9 +78,10 @@ async def websocket_end(websocket: WebSocket, db:AsyncSession = Depends(get_asyn
         if db_user:
             manager.disconnect(user_name=db_user.name)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+    except ReceiverNotFound:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
     except Exception as e:
         if db_user:
             manager.disconnect(user_name=db_user.name)
         logger.error(f"Unexpected error: {e}")
-        logger.error(f"Unexpected error: {e.__dict__}")
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)

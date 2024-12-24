@@ -35,3 +35,5 @@ class ConnectionManager:
         """disconnect event"""
         logger.debug(f"Called to disconnect user_name{user_name}")
         self.active_connections.pop(user_name, None)
+
+manager = ConnectionManager()
