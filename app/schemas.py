@@ -18,3 +18,6 @@ class TokensResponseSwagger(BaseModel):
 class MessageRes(BaseModel):
     message:str
     youWritten:bool
+
+class ChatsRes(BaseModel):
+    name:str

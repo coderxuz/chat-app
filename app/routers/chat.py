@@ -8,6 +8,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import or_
 from pydantic import ValidationError
 
 # from common import auth
@@ -16,7 +17,7 @@ from app.models import User, Chat
 from app.connection import manager
 from common import logger, auth
 from app.funcs.token import get_token
-from app.schemas import MessageData, MessageRes
+from app.schemas import MessageData, MessageRes, ChatsRes
 from app.funcs.chat_funcs import (
     query_get_receivers_socket,
     ReceiverNotFound,
@@ -26,7 +27,7 @@ from app.routers.auth import oauth2_scheme
 
 
 import json
-from typing import List , Dict
+from typing import List, Dict, Set
 
 router = APIRouter(prefix="/chat", tags=["CHAT"])
 
@@ -111,7 +112,7 @@ async def old_messages(
     user_name: str,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_async_db),
-)-> List[Dict[str, str|bool]]:
+) -> List[Dict[str, str | bool]]:
 
     subject = auth.get_subject(token=token)
 
@@ -139,12 +140,46 @@ async def old_messages(
         )
     )
     chats = chat.scalars().all()
-    
 
     return [
         {
-            "message":chat.message,
-            "youWritten":True if db_user.id == chat.sender_id else False 
+            "message": chat.message,
+            "youWritten": True if db_user.id == chat.sender_id else False,
         }
         for chat in chats
     ]
+
+
+@router.get("", response_model=List[ChatsRes])
+async def get_chatted_users(
+    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_async_db)
+):
+
+    subject = auth.get_subject(token=token)
+    user_query = await db.execute(select(User).where(User.name == subject))
+    db_user = user_query.scalars().first()
+
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated"
+        )
+
+    chat_query = await db.execute(
+        select(Chat).where(
+            or_(Chat.sender_id == db_user.id, Chat.receiver_id == db_user.id)
+        )
+    )
+    chats = chat_query.scalars().all()
+
+    chat_users_ids: Set[int] = set()
+
+    for chat in chats:
+        if chat.sender_id != db_user.id:
+            chat_users_ids.add(chat.sender_id)
+        if chat.receiver_id != db_user.id:
+            chat_users_ids.add(chat.receiver_id)
+
+    users_query = await db.execute(select(User).where(User.id.in_(chat_users_ids)))
+    users = users_query.scalars().all()
+
+    return [{"name": user.name} for user in users]
