@@ -7,3 +7,14 @@ class UserBase(BaseModel):
 
 class MessageData(BaseModel):
     message:str
+    
+class TokensResponse(BaseModel):
+    accessToken:str
+    refreshToken:str
+class TokensResponseSwagger(BaseModel):
+    access_token:str
+    refresh_token:str
+
+class MessageRes(BaseModel):
+    message:str
+    youWritten:bool
